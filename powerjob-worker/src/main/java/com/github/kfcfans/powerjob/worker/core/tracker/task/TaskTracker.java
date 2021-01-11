@@ -1,6 +1,7 @@
 package com.github.kfcfans.powerjob.worker.core.tracker.task;
 
 import akka.actor.ActorSelection;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.github.kfcfans.powerjob.common.ExecuteType;
 import com.github.kfcfans.powerjob.common.InstanceStatus;
 import com.github.kfcfans.powerjob.common.RemoteConstant;
@@ -8,7 +9,10 @@ import com.github.kfcfans.powerjob.common.TimeExpressionType;
 import com.github.kfcfans.powerjob.common.model.InstanceDetail;
 import com.github.kfcfans.powerjob.common.request.ServerScheduleJobReq;
 import com.github.kfcfans.powerjob.common.request.TaskTrackerReportInstanceStatusReq;
+import com.github.kfcfans.powerjob.common.request.WorkerQueryExecutorClusterReq;
+import com.github.kfcfans.powerjob.common.response.AskResponse;
 import com.github.kfcfans.powerjob.common.utils.CommonUtils;
+import com.github.kfcfans.powerjob.common.utils.JsonUtils;
 import com.github.kfcfans.powerjob.common.utils.SegmentLock;
 import com.github.kfcfans.powerjob.worker.OhMyWorker;
 import com.github.kfcfans.powerjob.worker.common.constants.TaskConstant;
@@ -63,10 +67,10 @@ public abstract class TaskTracker {
     // 是否结束
     protected AtomicBoolean finished;
     // 上报时间缓存
-    private Cache<String, Long> taskId2LastReportTime;
+    private final Cache<String, Long> taskId2LastReportTime;
 
     // 分段锁
-    private SegmentLock segmentLock;
+    private final SegmentLock segmentLock;
     private static final int UPDATE_CONCURRENCY = 4;
 
     protected TaskTracker(ServerScheduleJobReq req) {
@@ -111,11 +115,11 @@ public abstract class TaskTracker {
         try {
             TimeExpressionType timeExpressionType = TimeExpressionType.valueOf(req.getTimeExpressionType());
             switch (timeExpressionType) {
-                case FIX_RATE:
-                case FIX_DELAY:return new FrequentTaskTracker(req);
+                case FIXED_RATE:
+                case FIXED_DELAY:return new FrequentTaskTracker(req);
                 default:return new CommonTaskTracker(req);
             }
-        }catch (Exception e) {
+        } catch (Exception e) {
             log.warn("[TaskTracker-{}] create TaskTracker from request({}) failed.", req.getInstanceId(), req, e);
 
             // 直接发送失败请求
@@ -138,12 +142,13 @@ public abstract class TaskTracker {
     /**
      * 更新Task状态
      * V1.0.0 -> V1.0.1（e405e283ad7f97b0b4e5d369c7de884c0caf9192） 锁方案变更，从 synchronized (taskId.intern()) 修改为分段锁，能大大减少内存占用，损失的只有理论并发度而已
+     * @param subInstanceId 子任务实例ID
      * @param taskId task的ID（task为任务实例的执行单位）
      * @param newStatus task的新状态
      * @param reportTime 上报时间
      * @param result task的执行结果，未执行完成时为空
      */
-    public void updateTaskStatus(String taskId, int newStatus, long reportTime, @Nullable String result) {
+    public void updateTaskStatus(Long subInstanceId, String taskId, int newStatus, long reportTime, @Nullable String result) {
 
         if (finished.get()) {
             return;
@@ -165,7 +170,7 @@ public abstract class TaskTracker {
                     lastReportTime = taskOpt.get().getLastReportTime();
                 }else {
                     // 理论上不存在这种情况，除非数据库异常
-                    log.error("[TaskTracker-{}] can't find task by pkey(instanceId={}&taskId={}).", instanceId, instanceId, taskId);
+                    log.error("[TaskTracker-{}-{}] can't find task by taskId={}.", instanceId, subInstanceId, taskId);
                 }
 
                 if (lastReportTime == null) {
@@ -175,8 +180,8 @@ public abstract class TaskTracker {
 
             // 过滤过期的请求（潜在的集群时间一致性需求，重试跨Worker时，时间不一致可能导致问题）
             if (lastReportTime > reportTime) {
-                log.warn("[TaskTracker-{}] receive expired(last {} > current {}) task status report(taskId={},newStatus={}), TaskTracker will drop this report.",
-                        lastReportTime, reportTime, instanceId, taskId, newStatus);
+                log.warn("[TaskTracker-{}-{}] receive expired(last {} > current {}) task status report(taskId={},newStatus={}), TaskTracker will drop this report.",
+                        instanceId, subInstanceId, lastReportTime, reportTime, taskId, newStatus);
                 return;
             }
 
@@ -214,7 +219,7 @@ public abstract class TaskTracker {
 
                         boolean retryTask = taskPersistenceService.updateTask(instanceId, taskId, updateEntity);
                         if (retryTask) {
-                            log.info("[TaskTracker-{}] task(taskId={}) process failed, TaskTracker will have a retry.", instanceId, taskId);
+                            log.info("[TaskTracker-{}-{}] task(taskId={}) process failed, TaskTracker will have a retry.", instanceId, subInstanceId, taskId);
                             return;
                         }
                     }
@@ -226,12 +231,12 @@ public abstract class TaskTracker {
             boolean updateResult = taskPersistenceService.updateTaskStatus(instanceId, taskId, newStatus, reportTime, result);
 
             if (!updateResult) {
-                log.warn("[TaskTracker-{}] update task status failed, this task(taskId={}) may be processed repeatedly!", instanceId, taskId);
+                log.warn("[TaskTracker-{}-{}] update task status failed, this task(taskId={}) may be processed repeatedly!", instanceId, subInstanceId, taskId);
             }
 
         } catch (InterruptedException ignore) {
         } catch (Exception e) {
-            log.warn("[TaskTracker-{}] update task status failed.", instanceId, e);
+            log.warn("[TaskTracker-{}-{}] update task status failed.", instanceId, subInstanceId, e);
         } finally {
             segmentLock.unlock(lockId);
         }
@@ -278,7 +283,7 @@ public abstract class TaskTracker {
             List<TaskDO> unfinishedTask = TaskPersistenceService.INSTANCE.getAllUnFinishedTaskByAddress(instanceId, idlePtAddress);
             if (!CollectionUtils.isEmpty(unfinishedTask)) {
                 log.warn("[TaskTracker-{}] ProcessorTracker({}) is idle now but have unfinished tasks: {}", instanceId, idlePtAddress, unfinishedTask);
-                unfinishedTask.forEach(task -> updateTaskStatus(task.getTaskId(), TaskStatus.WORKER_PROCESS_FAILED.getValue(), System.currentTimeMillis(), "SYSTEM: unreceived process result"));
+                unfinishedTask.forEach(task -> updateTaskStatus(task.getSubInstanceId(), task.getTaskId(), TaskStatus.WORKER_PROCESS_FAILED.getValue(), System.currentTimeMillis(), "SYSTEM: unreceived process result"));
             }
         }
     }
@@ -296,7 +301,7 @@ public abstract class TaskTracker {
             return;
         }
 
-        log.info("[TaskTracker-{}] finished broadcast's preProcess.", instanceId);
+        log.info("[TaskTracker-{}-{}] finished broadcast's preProcess, preExecuteSuccess:{},preTaskId:{},result:{}", instanceId, subInstanceId, preExecuteSuccess, preTaskId, result);
 
         // 生成集群子任务
         if (preExecuteSuccess) {
@@ -311,7 +316,7 @@ public abstract class TaskTracker {
             }
             submitTask(subTaskList);
         }else {
-            log.debug("[TaskTracker-{}] BroadcastTask failed because of preProcess failed, preProcess result={}.", instanceId, result);
+            log.warn("[TaskTracker-{}-{}] BroadcastTask failed because of preProcess failed, preProcess result={}.", instanceId, subInstanceId, result);
         }
     }
 
@@ -441,7 +446,7 @@ public abstract class TaskTracker {
 
             // 3. 避免大查询，分批派发任务
             long currentDispatchNum = 0;
-            long maxDispatchNum = availablePtIps.size() * instanceInfo.getThreadConcurrency() * 2;
+            long maxDispatchNum = availablePtIps.size() * instanceInfo.getThreadConcurrency() * 2L;
             AtomicInteger index = new AtomicInteger(0);
 
             // 4. 循环查询数据库，获取需要派发的任务
@@ -467,6 +472,37 @@ public abstract class TaskTracker {
             }
 
             log.debug("[TaskTracker-{}] dispatched {} tasks,using time {}.", instanceId, currentDispatchNum, stopwatch.stop());
+        }
+    }
+
+    /**
+     * 执行器动态上线（for 秒级任务和 MR 任务）
+     * 原则：server 查询得到的 执行器状态不会干预 worker 自己维护的状态，即只做新增，不做任何修改
+     */
+    protected class WorkerDetector implements Runnable {
+        @Override
+        public void run() {
+            String serverPath = AkkaUtils.getAkkaServerPath(RemoteConstant.SERVER_ACTOR_NAME);
+            if (StringUtils.isEmpty(serverPath)) {
+                log.warn("[TaskTracker-{}] no server available, won't start worker detective!", instanceId);
+                return;
+            }
+            WorkerQueryExecutorClusterReq req = new WorkerQueryExecutorClusterReq(OhMyWorker.getAppId(), instanceInfo.getJobId());
+            AskResponse response = AkkaUtils.easyAsk(OhMyWorker.actorSystem.actorSelection(serverPath), req);
+            if (!response.isSuccess()) {
+                log.warn("[TaskTracker-{}] detective failed due to ask failed, message is {}", instanceId, response.getMessage());
+                return;
+            }
+            try {
+                List<String> workerList = JsonUtils.parseObject(response.getData(), new TypeReference<List<String>>() {});
+                workerList.forEach(address -> {
+                    if (ptStatusHolder.register(address)) {
+                        log.info("[TaskTracker-{}] detective new worker: {}", instanceId, address);
+                    }
+                });
+            }catch (Exception e) {
+                log.warn("[TaskTracker-{}] detective failed!", instanceId, e);
+            }
         }
     }
 

@@ -17,7 +17,6 @@ import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.time.DateFormatUtils;
 import org.springframework.beans.BeanUtils;
 import org.springframework.util.StringUtils;
 
@@ -85,14 +84,14 @@ public class FrequentTaskTracker extends TaskTracker {
         // 1. 初始化定时调度线程池
         String poolName = String.format("ftttp-%d", req.getInstanceId()) + "-%d";
         ThreadFactory factory = new ThreadFactoryBuilder().setNameFormat(poolName).build();
-        this.scheduledPool = Executors.newScheduledThreadPool(3, factory);
+        this.scheduledPool = Executors.newScheduledThreadPool(4, factory);
 
         // 2. 启动任务发射器
         launcher = new Launcher();
-        if (timeExpressionType == TimeExpressionType.FIX_RATE) {
+        if (timeExpressionType == TimeExpressionType.FIXED_RATE) {
             // 固定频率需要设置最小间隔
             if (timeParams < MIN_INTERVAL) {
-                throw new OmsException("time interval too small, please set the timeExpressionInfo >= 1000");
+                throw new PowerJobException("time interval too small, please set the timeExpressionInfo >= 1000");
             }
             scheduledPool.scheduleAtFixedRate(launcher, 1, timeParams, TimeUnit.MILLISECONDS);
         }else {
@@ -103,6 +102,8 @@ public class FrequentTaskTracker extends TaskTracker {
         scheduledPool.scheduleWithFixedDelay(new Dispatcher(), 1, 2, TimeUnit.SECONDS);
         // 4. 启动状态检查器
         scheduledPool.scheduleWithFixedDelay(new Checker(), 5000, Math.min(Math.max(timeParams, 5000), 15000), TimeUnit.MILLISECONDS);
+        // 5. 启动执行器动态检测装置
+        scheduledPool.scheduleAtFixedRate(new WorkerDetector(), 1, 1, TimeUnit.MINUTES);
     }
 
     @Override
@@ -121,16 +122,11 @@ public class FrequentTaskTracker extends TaskTracker {
             subDetail.setStatus(status.getV());
             subDetail.setSubInstanceId(subId);
 
-            // 设置时间
-            subDetail.setStartTime(DateFormatUtils.format(subInstanceInfo.getStartTime(), OmsConstant.TIME_PATTERN));
-            if (status == InstanceStatus.SUCCEED || status == InstanceStatus.FAILED) {
-                subDetail.setFinishedTime(DateFormatUtils.format(subInstanceInfo.getFinishedTime(), OmsConstant.TIME_PATTERN));
-            }else {
-                subDetail.setFinishedTime("N/A");
-            }
-
             history.add(subDetail);
         });
+
+        // 按 subInstanceId 排序 issue#63
+        history.sort((o1, o2) -> (int) (o2.getSubInstanceId() - o1.getSubInstanceId()));
 
         detail.setSubInstanceDetails(history);
         return detail;
@@ -150,15 +146,10 @@ public class FrequentTaskTracker extends TaskTracker {
             // 子任务实例ID
             Long subInstanceId = triggerTimes.incrementAndGet();
 
-            // 记录时间
-            SubInstanceTimeHolder timeHolder = new SubInstanceTimeHolder();
-            timeHolder.startTime = timeHolder.lastActiveTime = System.currentTimeMillis();
-            subInstanceId2TimeHolder.put(subInstanceId, timeHolder);
-
-            // 执行记录缓存
+            // 执行记录缓存（只做展示，因此可以放在前面）
             SubInstanceInfo subInstanceInfo = new SubInstanceInfo();
             subInstanceInfo.status = TaskStatus.DISPATCH_SUCCESS_WORKER_UNCHECK.getValue();
-            subInstanceInfo.startTime = timeHolder.startTime;
+            subInstanceInfo.startTime = System.currentTimeMillis();
             recentSubInstanceInfo.put(subInstanceId, subInstanceInfo);
 
             String myAddress = OhMyWorker.getWorkerAddress();
@@ -180,20 +171,27 @@ public class FrequentTaskTracker extends TaskTracker {
             newRootTask.setLastReportTime(-1L);
 
             // 判断是否超出最大执行实例数
-            if (timeExpressionType == TimeExpressionType.FIX_RATE) {
-                if (subInstanceId2TimeHolder.size() > maxInstanceNum) {
-                    log.warn("[TaskTracker-{}] cancel to launch the subInstance({}) due to too much subInstance is running.", instanceId, subInstanceId);
-                    processFinishedSubInstance(subInstanceId, false, "TOO_MUCH_INSTANCE");
-                    return;
+            if (maxInstanceNum > 0) {
+                if (timeExpressionType == TimeExpressionType.FIXED_RATE) {
+                    if (subInstanceId2TimeHolder.size() > maxInstanceNum) {
+                        log.warn("[FQTaskTracker-{}] cancel to launch the subInstance({}) due to too much subInstance is running.", instanceId, subInstanceId);
+                        processFinishedSubInstance(subInstanceId, false, "TOO_MUCH_INSTANCE");
+                        return;
+                    }
                 }
             }
 
             // 必须先持久化，持久化成功才能 dispatch，否则会导致后续报错（因为DB中没有这个taskId对应的记录，会各种报错）
             if (!taskPersistenceService.save(newRootTask)) {
-                log.error("[TaskTracker-{}] Launcher create new root task failed.", instanceId);
+                log.error("[FQTaskTracker-{}] Launcher create new root task failed.", instanceId);
                 processFinishedSubInstance(subInstanceId, false, "LAUNCH_FAILED");
                 return;
             }
+
+            // 生成记录信息（必须保证持久化成功才能生成该记录，否则会导致 LAUNCH_FAILED 错误）
+            SubInstanceTimeHolder timeHolder = new SubInstanceTimeHolder();
+            timeHolder.startTime = System.currentTimeMillis();
+            subInstanceId2TimeHolder.put(subInstanceId, timeHolder);
 
             dispatchTask(newRootTask, myAddress);
         }
@@ -203,7 +201,7 @@ public class FrequentTaskTracker extends TaskTracker {
             try {
                 innerRun();
             }catch (Exception e) {
-                log.error("[TaskTracker-{}] launch task failed.", instanceId, e);
+                log.error("[FQTaskTracker-{}] launch task failed.", instanceId, e);
             }
         }
     }
@@ -212,8 +210,6 @@ public class FrequentTaskTracker extends TaskTracker {
      * 检查各个SubInstance的完成情况
      */
     private class Checker implements Runnable {
-
-        private static final long HEARTBEAT_TIMEOUT_MS = 60000;
 
         @Override
         public void run() {
@@ -226,12 +222,23 @@ public class FrequentTaskTracker extends TaskTracker {
                 checkStatus();
                 reportStatus();
             }catch (Exception e) {
-                log.warn("[TaskTracker-{}] check and report status failed.", instanceId, e);
+                log.warn("[FQTaskTracker-{}] check and report status failed.", instanceId, e);
             }
         }
 
         private void checkStatus() {
             Stopwatch stopwatch = Stopwatch.createStarted();
+
+            // worker 挂掉的任务直接置为失败
+            List<String> disconnectedPTs = ptStatusHolder.getAllDisconnectedProcessorTrackers();
+            if (!disconnectedPTs.isEmpty()) {
+                log.warn("[FQTaskTracker-{}] some ProcessorTracker disconnected from TaskTracker,their address is {}.", instanceId, disconnectedPTs);
+                if (taskPersistenceService.updateLostTasks(instanceId, disconnectedPTs, false)) {
+                    ptStatusHolder.remove(disconnectedPTs);
+                    log.warn("[FQTaskTracker-{}] removed these ProcessorTracker from StatusHolder: {}", instanceId, disconnectedPTs);
+                }
+            }
+
             ExecuteType executeType = ExecuteType.valueOf(instanceInfo.getExecuteType());
             long instanceTimeoutMS = instanceInfo.getInstanceTimeoutMS();
             long nowTS = System.currentTimeMillis();
@@ -244,12 +251,10 @@ public class FrequentTaskTracker extends TaskTracker {
                 SubInstanceTimeHolder timeHolder = entry.getValue();
 
                 long executeTimeout = nowTS - timeHolder.startTime;
-                long heartbeatTimeout = nowTS - timeHolder.lastActiveTime;
 
                 // 超时（包含总运行时间超时和心跳包超时），直接判定为失败
-                if (executeTimeout > instanceTimeoutMS || heartbeatTimeout > HEARTBEAT_TIMEOUT_MS) {
-
-                    onFinished(subInstanceId, false, "TIMEOUT", iterator);
+                if (executeTimeout > instanceTimeoutMS) {
+                    onFinished(subInstanceId, false, "RUNNING_TIMEOUT", iterator);
                     continue;
                 }
 
@@ -299,14 +304,11 @@ public class FrequentTaskTracker extends TaskTracker {
                                 newLastTask.setAddress(OhMyWorker.getWorkerAddress());
                                 submitTask(Lists.newArrayList(newLastTask));
                             }
-
                     }
                 }
-
                 // 舍去一切重试机制，反正超时就失败
-
-                log.debug("[TaskTracker-{}] check status using {}.", instanceId, stopwatch.stop());
             }
+            log.debug("[FQTaskTracker-{}] check status using {}.", instanceId, stopwatch);
         }
 
         private void reportStatus() {
@@ -366,7 +368,7 @@ public class FrequentTaskTracker extends TaskTracker {
         taskPersistenceService.deleteAllSubInstanceTasks(instanceId, subInstanceId);
 
         // FIX_DELAY 则调度下次任务
-        if (timeExpressionType == TimeExpressionType.FIX_DELAY) {
+        if (timeExpressionType == TimeExpressionType.FIXED_DELAY) {
             scheduledPool.schedule(launcher, timeParams, TimeUnit.MILLISECONDS);
         }
     }
@@ -381,7 +383,6 @@ public class FrequentTaskTracker extends TaskTracker {
 
     private static class SubInstanceTimeHolder {
         private long startTime;
-        private long lastActiveTime;
     }
 
 }

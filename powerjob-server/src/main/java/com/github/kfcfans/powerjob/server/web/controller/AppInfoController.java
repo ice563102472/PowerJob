@@ -1,5 +1,6 @@
 package com.github.kfcfans.powerjob.server.web.controller;
 
+import com.github.kfcfans.powerjob.common.PowerJobException;
 import com.github.kfcfans.powerjob.common.response.ResultDTO;
 import com.github.kfcfans.powerjob.server.persistence.core.model.AppInfoDO;
 import com.github.kfcfans.powerjob.server.persistence.core.repository.AppInfoRepository;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 import javax.annotation.Resource;
 import java.util.Date;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -36,11 +38,12 @@ public class AppInfoController {
     @Resource
     private AppInfoRepository appInfoRepository;
 
-    private static final int MAX_APP_NUM = 50;
+    private static final int MAX_APP_NUM = 200;
 
     @PostMapping("/save")
     public ResultDTO<Void> saveAppInfo(@RequestBody ModifyAppInfoRequest req) {
 
+        req.valid();
         AppInfoDO appInfoDO;
 
         Long id = req.getId();
@@ -49,6 +52,11 @@ public class AppInfoController {
             appInfoDO.setGmtCreate(new Date());
         }else {
             appInfoDO = appInfoRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("can't find appInfo by id:" + id));
+
+            // 对比密码
+            if (!Objects.equals(req.getOldPassword(), appInfoDO.getPassword())) {
+                throw new PowerJobException("The password is incorrect.");
+            }
         }
         BeanUtils.copyProperties(req, appInfoDO);
         appInfoDO.setGmtModified(new Date());

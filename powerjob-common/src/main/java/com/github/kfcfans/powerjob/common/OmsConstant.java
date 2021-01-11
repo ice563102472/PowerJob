@@ -1,7 +1,7 @@
 package com.github.kfcfans.powerjob.common;
 
 /**
- * 公共常量
+ * Common constants.
  *
  * @author tjq
  * @since 2020/5/31
@@ -12,4 +12,9 @@ public class OmsConstant {
     public static final String TIME_PATTERN_PLUS = "yyyy-MM-dd HH:mm:ss.SSS";
 
     public static final String NONE = "N/A";
+
+    public static final String COMMA = ",";
+    public static final String LINE_SEPARATOR = "\r\n";
+
+    public static final String JSON_MEDIA_TYPE = "application/json; charset=utf-8";
 }

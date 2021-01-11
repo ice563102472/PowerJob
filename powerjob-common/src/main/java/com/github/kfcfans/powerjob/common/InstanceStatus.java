@@ -7,7 +7,7 @@ import lombok.Getter;
 import java.util.List;
 
 /**
- * 任务运行状态
+ * Status of the job instance
  *
  * @author tjq
  * @since 2020/3/17
@@ -21,13 +21,16 @@ public enum InstanceStatus {
     RUNNING(3, "运行中"),
     FAILED(4, "失败"),
     SUCCEED(5, "成功"),
+    CANCELED(9, "取消"),
     STOPPED(10, "手动停止");
 
-    private int v;
-    private String des;
+    private final int v;
+    private final String des;
 
     // 广义的运行状态
     public static final List<Integer> generalizedRunningStatus = Lists.newArrayList(WAITING_DISPATCH.v, WAITING_WORKER_RECEIVE.v, RUNNING.v);
+    // 结束状态
+    public static final List<Integer> finishedStatus = Lists.newArrayList(FAILED.v, SUCCEED.v, CANCELED.v, STOPPED.v);
 
     public static InstanceStatus of(int v) {
         for (InstanceStatus is : values()) {

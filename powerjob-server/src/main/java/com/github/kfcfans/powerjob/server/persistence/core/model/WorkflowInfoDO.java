@@ -3,6 +3,7 @@ package com.github.kfcfans.powerjob.server.persistence.core.model;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.GenericGenerator;
 
 import javax.persistence.*;
 import java.util.Date;
@@ -17,11 +18,12 @@ import java.util.Date;
 @Entity
 @NoArgsConstructor
 @AllArgsConstructor
-@Table(name = "workflow_info", indexes = {@Index(columnList = "appId")})
+@Table(indexes = {@Index(columnList = "appId")})
 public class WorkflowInfoDO {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.AUTO, generator = "native")
+    @GenericGenerator(name = "native", strategy = "native")
     private Long id;
 
     private String wfName;
@@ -32,7 +34,7 @@ public class WorkflowInfoDO {
 
     // 工作流的DAG图信息（点线式DAG的json）
     @Lob
-    @Column(columnDefinition="TEXT")
+    @Column
     private String peDAG;
 
     /* ************************** 定时参数 ************************** */

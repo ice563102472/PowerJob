@@ -82,7 +82,7 @@ public class OpenAPIController {
     @PostMapping(OpenAPIConstant.RUN_JOB)
     public ResultDTO<Long> runJob(Long appId, Long jobId, @RequestParam(required = false) String instanceParams, @RequestParam(required = false) Long delay) {
         checkJobIdValid(jobId, appId);
-        return ResultDTO.success(jobService.runJob(jobId, instanceParams, delay == null ? 0 : delay));
+        return ResultDTO.success(jobService.runJob(appId, jobId, instanceParams, delay));
     }
 
     /* ************* Instance 区 ************* */
@@ -91,6 +91,20 @@ public class OpenAPIController {
     public ResultDTO<Void> stopInstance(Long instanceId, Long appId) {
         checkInstanceIdValid(instanceId, appId);
         instanceService.stopInstance(instanceId);
+        return ResultDTO.success(null);
+    }
+
+    @PostMapping(OpenAPIConstant.CANCEL_INSTANCE)
+    public ResultDTO<Void> cancelInstance(Long instanceId, Long appId) {
+        checkInstanceIdValid(instanceId, appId);
+        instanceService.cancelInstance(instanceId);
+        return ResultDTO.success(null);
+    }
+
+    @PostMapping(OpenAPIConstant.RETRY_INSTANCE)
+    public ResultDTO<Void> retryInstance(Long instanceId, Long appId) {
+        checkInstanceIdValid(instanceId, appId);
+        instanceService.retryInstance(appId, instanceId);
         return ResultDTO.success(null);
     }
 
@@ -108,9 +122,6 @@ public class OpenAPIController {
     /* ************* Workflow 区 ************* */
     @PostMapping(OpenAPIConstant.SAVE_WORKFLOW)
     public ResultDTO<Long> saveWorkflow(@RequestBody SaveWorkflowRequest request) throws Exception {
-        if (request.getId() != null) {
-            checkJobIdValid(request.getId(), request.getAppId());
-        }
         return ResultDTO.success(workflowService.saveWorkflow(request));
     }
 
@@ -136,8 +147,8 @@ public class OpenAPIController {
     }
 
     @PostMapping(OpenAPIConstant.RUN_WORKFLOW)
-    public ResultDTO<Long> runWorkflow(Long workflowId, Long appId) {
-        return ResultDTO.success(workflowService.runWorkflow(workflowId, appId));
+    public ResultDTO<Long> runWorkflow(Long workflowId, Long appId, @RequestParam(required = false) String initParams, @RequestParam(required = false) Long delay) {
+        return ResultDTO.success(workflowService.runWorkflow(workflowId, appId, initParams, delay));
     }
 
     /* ************* Workflow Instance 区 ************* */

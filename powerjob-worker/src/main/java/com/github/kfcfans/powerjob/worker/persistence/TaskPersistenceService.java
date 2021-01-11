@@ -36,7 +36,7 @@ public class TaskPersistenceService {
     private TaskPersistenceService() {
     }
 
-    private TaskDAO taskDAO = new TaskDAOImpl();
+    private final TaskDAO taskDAO = new TaskDAOImpl();
 
     public void init() throws Exception {
         if (initialized) {
@@ -98,19 +98,26 @@ public class TaskPersistenceService {
      * 更新被派发到已经失联的 ProcessorTracker 的任务，重新执行
      * update task_info
      * set address = 'N/A', status = 0
-     * where address in () and status not in (5,6)
+     * where address in () and status not in (5,6) and instance_id = 277
      */
-    public boolean updateLostTasks(List<String> addressList) {
+    public boolean updateLostTasks(Long instanceId, List<String> addressList, boolean retry) {
 
         TaskDO updateEntity = new TaskDO();
-        updateEntity.setAddress(RemoteConstant.EMPTY_ADDRESS);
-        updateEntity.setStatus(TaskStatus.WAITING_DISPATCH.getValue());
         updateEntity.setLastModifiedTime(System.currentTimeMillis());
+        if (retry) {
+            updateEntity.setAddress(RemoteConstant.EMPTY_ADDRESS);
+            updateEntity.setStatus(TaskStatus.WAITING_DISPATCH.getValue());
+        }else {
+            updateEntity.setStatus(TaskStatus.WORKER_PROCESS_FAILED.getValue());
+            updateEntity.setResult("maybe worker down");
+        }
 
         SimpleTaskQuery query = new SimpleTaskQuery();
+        query.setInstanceId(instanceId);
         String queryConditionFormat = "address in %s and status not in (%d, %d)";
         String queryCondition = String.format(queryConditionFormat, CommonUtils.getInStringCondition(addressList), TaskStatus.WORKER_PROCESS_FAILED.getValue(), TaskStatus.WORKER_PROCESS_SUCCESS.getValue());
         query.setQueryCondition(queryCondition);
+        log.debug("[TaskPersistenceService] updateLostTasks-QUERY-SQL: {}", query.getQueryCondition());
 
         try {
             return execute(() -> taskDAO.simpleUpdate(query, updateEntity));
@@ -207,8 +214,8 @@ public class TaskPersistenceService {
                 Map<TaskStatus, Long> result = Maps.newHashMap();
                 dbRES.forEach(row -> {
                     // H2 数据库都是大写...
-                    int status = Integer.parseInt(String.valueOf(row.get("STATUS")));
-                    long num = Long.parseLong(String.valueOf(row.get("NUM")));
+                    int status = Integer.parseInt(String.valueOf(row.get("status")));
+                    long num = Long.parseLong(String.valueOf(row.get("num")));
                     result.put(TaskStatus.of(status), num);
                 });
                 return result;
@@ -238,10 +245,10 @@ public class TaskPersistenceService {
 
         try {
             SimpleTaskQuery query = genKeyQuery(instanceId, taskId);
-            query.setQueryContent("STATUS");
+            query.setQueryContent("status");
             return execute(() -> {
                 List<Map<String, Object>> rows = taskDAO.simpleQueryPlus(query);
-                return Optional.of(TaskStatus.of((int) rows.get(0).get("STATUS")));
+                return Optional.of(TaskStatus.of((int) rows.get(0).get("status")));
             });
         }catch (Exception e) {
             log.error("[TaskPersistenceService] getTaskStatus failed, instanceId={},taskId={}.", instanceId, taskId, e);

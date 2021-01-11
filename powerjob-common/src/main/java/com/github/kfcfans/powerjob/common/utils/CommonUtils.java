@@ -1,11 +1,13 @@
 package com.github.kfcfans.powerjob.common.utils;
 
-import com.github.kfcfans.powerjob.common.OmsException;
+import com.github.kfcfans.powerjob.common.OmsConstant;
+import com.github.kfcfans.powerjob.common.PowerJobException;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.time.DateFormatUtils;
 
 import java.util.Collection;
-import java.util.Objects;
+import java.util.UUID;
 import java.util.function.Supplier;
 
 
@@ -119,14 +121,38 @@ public class CommonUtils {
 
     public static <T> T requireNonNull(T obj, String msg) {
         if (obj == null) {
-            throw new OmsException(msg);
+            throw new PowerJobException(msg);
         }
         if (obj instanceof String) {
             if (StringUtils.isEmpty((String) obj)) {
-                throw new OmsException(msg);
+                throw new PowerJobException(msg);
             }
         }
         return obj;
+    }
+
+    /**
+     * 格式化时间，将时间戳转化为可阅读时间
+     * @param ts 时间戳
+     * @return 可阅读时间
+     */
+    public static String formatTime(Long ts) {
+        if (ts == null || ts <= 0) {
+            return OmsConstant.NONE;
+        }
+        try {
+            return DateFormatUtils.format(ts, OmsConstant.TIME_PATTERN);
+        }catch (Exception ignore) {
+        }
+        return OmsConstant.NONE;
+    }
+
+    /**
+     * 生成 UUID
+     * @return uuid
+     */
+    public static String genUUID() {
+        return StringUtils.replace(UUID.randomUUID().toString(), "-", "");
     }
 
 }

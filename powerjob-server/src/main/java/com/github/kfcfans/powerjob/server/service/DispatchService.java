@@ -66,18 +66,32 @@ public class DispatchService {
         Date now = new Date();
         String dbInstanceParams = instanceParams == null ? "" : instanceParams;
 
+        // 检查当前任务是否被取消
+        InstanceInfoDO instanceInfo = instanceInfoRepository.findByInstanceId(instanceId);
+        if ( CANCELED.getV() == instanceInfo.getStatus()) {
+            log.info("[Dispatcher-{}|{}] cancel dispatch due to instance has been canceled", jobId, instanceId);
+            return;
+        }
+
         // 查询当前运行的实例数
         long current = System.currentTimeMillis();
-        long runningInstanceCount = instanceInfoRepository.countByJobIdAndStatusIn(jobId, generalizedRunningStatus);
 
-        // 超出最大同时运行限制，不执行调度
-        if (runningInstanceCount > jobInfo.getMaxInstanceNum()) {
-            String result = String.format(SystemInstanceResult.TOO_MUCH_INSTANCE, runningInstanceCount, jobInfo.getMaxInstanceNum());
-            log.warn("[Dispatcher-{}|{}] cancel dispatch job due to too much instance(num={}) is running.", jobId, instanceId, runningInstanceCount);
-            instanceInfoRepository.update4TriggerFailed(instanceId, FAILED.getV(), currentRunningTimes, current, current, RemoteConstant.EMPTY_ADDRESS, result, dbInstanceParams, now);
+        // 0 代表不限制在线任务，还能省去一次 DB 查询
+        Integer maxInstanceNum = jobInfo.getMaxInstanceNum();
+        if (maxInstanceNum > 0) {
 
-            instanceManager.processFinishedInstance(instanceId, wfInstanceId, FAILED, result);
-            return;
+            // 这个 runningInstanceCount 已经包含了本 instance
+            // 不统计 WAITING_DISPATCH 的状态：使用 OpenAPI 触发的延迟任务不应该统计进去（比如 delay 是 1 天）
+            long runningInstanceCount = instanceInfoRepository.countByJobIdAndStatusIn(jobId, Lists.newArrayList(WAITING_WORKER_RECEIVE.getV(), RUNNING.getV()));
+            // 超出最大同时运行限制，不执行调度
+            if (runningInstanceCount > maxInstanceNum) {
+                String result = String.format(SystemInstanceResult.TOO_MANY_INSTANCES, runningInstanceCount, maxInstanceNum);
+                log.warn("[Dispatcher-{}|{}] cancel dispatch job due to too much instance is running ({} > {}).", jobId, instanceId, runningInstanceCount, maxInstanceNum);
+                instanceInfoRepository.update4TriggerFailed(instanceId, FAILED.getV(), currentRunningTimes, current, current, RemoteConstant.EMPTY_ADDRESS, result, dbInstanceParams, now);
+
+                instanceManager.processFinishedInstance(instanceId, wfInstanceId, FAILED, result);
+                return;
+            }
         }
 
         // 获取当前所有可用的Worker

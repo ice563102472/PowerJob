@@ -6,10 +6,10 @@
 
     <groupId>com.github.kfcfans</groupId>
     <artifactId>powerjob</artifactId>
-    <version>1.0.0</version>
+    <version>2.0.0</version>
     <packaging>pom</packaging>
     <name>powerjob</name>
-    <url>https://github.com/KFCFans/OhMyScheduler</url>
+    <url>http://www.powerjob.tech</url>
     <description>Distributed scheduling and execution framework</description>
     <licenses>
         <license>
@@ -19,8 +19,8 @@
         </license>
     </licenses>
     <scm>
-        <url>https://github.com/KFCFans/OhMyScheduler</url>
-        <connection>https://github.com/KFCFans/OhMyScheduler.git</connection>
+        <url>https://github.com/PowerJob/PowerJob</url>
+        <connection>https://github.com/PowerJob/PowerJob.git</connection>
     </scm>
 
     <developers>
@@ -40,8 +40,9 @@
         <module>powerjob-server</module>
         <module>powerjob-common</module>
         <module>powerjob-client</module>
-        <module>powerjob-worker-samples</module>
         <module>powerjob-worker-agent</module>
+        <module>powerjob-worker-spring-boot-starter</module>
+        <module>powerjob-worker-samples</module>
     </modules>
 
     <properties>
@@ -86,7 +87,7 @@
                             <testTarget>${java.version}</testTarget>
                         </configuration>
                     </plugin>
-                    <!-- 打包源码 -->
+                    <!-- Package source codes -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-source-plugin</artifactId>
@@ -120,9 +121,9 @@
                         <artifactId>maven-javadoc-plugin</artifactId>
                         <version>${maven-javadoc-plugin.version}</version>
                         <configuration>
-                            <!-- JavaDoc 编译错误不影响正常构建 -->
+                            <!-- Prevent JavaDoc error from affecting building project. -->
                             <failOnError>false</failOnError>
-                            <!-- 非严格模式...以后要好好按格式写注释啊... -->
+                            <!-- Non-strict mode -->
                             <additionalJOption>-Xdoclint:none</additionalJOption>
                         </configuration>
                         <executions>
@@ -163,7 +164,7 @@
             </distributionManagement>
         </profile>
 
-        <!-- 本地使用 -->
+        <!-- Local profile -->
         <profile>
             <id>dev</id>
             <activation>
@@ -172,7 +173,7 @@
 
             <build>
                 <plugins>
-                    <!-- 编译插件 -->
+                    <!-- Maven compiler plugin -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-compiler-plugin</artifactId>
@@ -184,7 +185,7 @@
                             <testTarget>${java.version}</testTarget>
                         </configuration>
                     </plugin>
-                    <!-- 编辑 MANIFEST.MF -->
+                    <!-- Edit MANIFEST.MF -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-jar-plugin</artifactId>
