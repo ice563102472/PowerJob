@@ -12,6 +12,7 @@ import com.github.kfcfans.powerjob.server.akka.actors.ServerActor;
 import com.github.kfcfans.powerjob.server.akka.actors.ServerTroubleshootingActor;
 import com.github.kfcfans.powerjob.server.common.PowerJobServerConfigKey;
 import com.github.kfcfans.powerjob.server.common.utils.PropertyUtils;
+import com.github.kfcfans.powerjob.server.common.utils.TimeUtils;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.Maps;
 import com.typesafe.config.Config;
@@ -46,7 +47,7 @@ public class OhMyServer {
         log.info("[OhMyServer] OhMyServer's akka system start to bootstrap...");
 
         // 忽略了一个问题，机器是没办法访问外网的，除非架设自己的NTP服务器
-        // TimeUtils.check();
+//         TimeUtils.check();
 
         // 解析配置文件
         PropertyUtils.init();
